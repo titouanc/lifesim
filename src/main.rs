@@ -3,6 +3,7 @@ use synapse::*;
 
 extern crate simple;
 
+use std::collections::HashSet;
 use ndarray::prelude::*;
 use ndarray_rand::rand_distr::Uniform;
 use rayon::prelude::*;
@@ -367,12 +368,12 @@ impl World {
     }
 }
 
-const N_CREATURES: u32 = 25;
+const N_CREATURES: u32 = 100;
 const N_GENES: u32 = 16;
 
 const WORLD_WIDTH: u32 = 1920;
 const WORLD_HEIGHT: u32 = 1080;
-const MUTATION_P: f64 = 10.0 / (N_CREATURES * N_GENES) as f64;
+const MUTATION_P: f64 = 3.0 / (N_CREATURES * N_GENES) as f64;
 
 fn simulate(genomes: &Vec<Vec<u32>>, gardens: &Vec<Garden>) -> Vec<Vec<u32>> {
     let mut world = World::new(WORLD_WIDTH as usize, WORLD_HEIGHT as usize, gardens);
@@ -434,7 +435,7 @@ fn simulate(genomes: &Vec<Vec<u32>>, gardens: &Vec<Garden>) -> Vec<Vec<u32>> {
 fn main() {
     let mut run = 1;
     let mut generation = 0;
-    let mut genomes = (0..N_CREATURES).map(|_| Creature::random(N_GENES as usize).genome()).collect();
+    let mut genomes: Vec<Vec<u32>> = (0..N_CREATURES).map(|_| Creature::random(N_GENES as usize).genome()).collect();
 
     let gardens = vec![
         // Garden {
@@ -461,7 +462,11 @@ fn main() {
     let gardens_ratio = gardens_area / (WORLD_WIDTH * WORLD_HEIGHT) as f64;
 
     loop {
+        let genomes_distinct: HashSet<String> = genomes.iter().map(pretty_genome).collect();
+        let diversity_ratio = (genomes_distinct.len() as f64) / (N_CREATURES as f64);
+
         let survivors = simulate(&genomes, &gardens);
+
         let survivors_ratio = (survivors.len() as f64) / (N_CREATURES as f64);
         let score = if survivors_ratio < gardens_ratio {
             survivors_ratio / gardens_ratio - 1.
@@ -469,7 +474,7 @@ fn main() {
             (survivors_ratio - gardens_ratio) / (1. - gardens_ratio)
         };
         let pretty_score = f64::round(100. * score) as i32;
-        println!("Experiment {} / Generation: {} / Survivors: {}% (with {}% garden) => Score: \x1b[1m{}\x1b[0m", run, generation, (100. * survivors_ratio) as i32, (100. * gardens_ratio) as i32, pretty_score);
+        println!("Civilisation {} / Generation: {} / Diversity: {}% / Survivors: {}% => Score: \x1b[1m{}\x1b[0m", run, generation, (100. * diversity_ratio) as i32, (100. * survivors_ratio) as i32, pretty_score);
         
         if survivors.len() == 0 {
             generation = 0;
