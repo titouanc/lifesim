@@ -336,23 +336,28 @@ impl World {
                 .par_iter()
                 .map(|c| self.sense(c.position[0], c.position[1], SENSE_RANGE_MULT * c.size))
                 .collect();
+
+        // Let the creatures think
         for (creature, s) in &mut self.population.iter_mut().zip(sense) {
             creature.think(&s);
         }
 
-        for i in 0..self.population.len() {
-            if self.collide_next(&self.population[i]){
-                self.population[i].blocked = true;
-            } else {
-                self.population[i].blocked =
-                    self.population
-                        .par_iter()
-                        .enumerate()
-                        .any(|(j, c)| i != j && c.collide(&self.population[i]));
-            }
-        }
+        // Check for collisions
+        let collisions: Vec<bool> =
+            self.population
+                .par_iter()
+                .enumerate()
+                .map(|(i, creature)|
+                    self.collide_next(creature)
+                    || self.population
+                           .iter()
+                           .enumerate()
+                           .any(|(j, c)| i != j && c.collide_next(creature))
+                )
+                .collect();
 
-        for creature in &mut self.population {
+        for (creature, blocked) in &mut self.population.iter_mut().zip(collisions) {
+            creature.blocked = blocked;
             creature.act();
         }
     }
