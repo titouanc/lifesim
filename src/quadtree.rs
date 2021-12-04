@@ -1,85 +1,126 @@
-struct Query<K> {x: K, y: K, w: K, h: K}
+// A spatial query to lookup in the tree
+#[derive(Copy, Clone)]
+enum Query<K> {
+    Everything,
+    Rect {x: K, y: K, w: K, h: K},
+}
 
+// Units of storage within the tree
 struct Node<K, V> {
-    top_left: Box<Option<Node<K, V>>>,
-    top_right: Box<Option<Node<K, V>>>,
-    bottom_left: Box<Option<Node<K, V>>>,
-    bottom_right: Box<Option<Node<K, V>>>,
+    children: [Option<Box<Node<K, V>>>; 4],
     value: V,
     x: K,
     y: K,
 }
 
+impl<K: std::cmp::PartialOrd + std::ops::Add<Output=K> + Copy> Query<K> {
+    fn contains<V>(&self, node: &Node<K, V>) -> bool {
+        match self {
+            &Query::Everything =>
+                true,
+            &Query::Rect {x, y, w, h} =>
+                x < node.x && node.x < x + w && y < node.y && node.y < y + h,
+        }
+    }
+}
+
+// See https://aloso.github.io/2021/03/09/creating-an-iterator
+pub struct NodeIter<'a, K, V> {
+    parent: Option<Box<NodeIter<'a, K, V>>>,
+    started: bool,
+    to_visit: Vec<&'a Node<K, V>>,
+    query: Query<K>,
+}
+
+impl<K, V> NodeIter<'_, K, V> {
+    fn depth(&self, acc: usize) -> usize {
+        match &self.parent {
+            None => acc,
+            Some(x) => x.depth(1 + acc),
+        }
+    }
+}
+
+impl<'a, K, V> NodeIter<'a, K, V> {
+    fn new(parent: Option<Box<NodeIter<'a, K, V>>>, node: &'a Node<K, V>, query: Query<K>) -> NodeIter<'a, K, V> {
+        let mut to_visit: Vec<&'a Node<K, V>> = vec![];
+        for child in &node.children {
+            match child {
+                Some(x) => to_visit.push(&x),
+                _ => {}
+            }
+        }
+        to_visit.push(node);
+
+        NodeIter {
+            started: false,
+            parent: parent,
+            to_visit: to_visit,
+            query: query
+        }
+    }
+}
+
+impl<K, V> Default for NodeIter<'_, K, V> {
+    fn default() -> Self {
+        NodeIter {
+            parent: None,
+            started: false,
+            to_visit: vec![],
+            query: Query::Everything,
+        }
+    }
+}
+
+impl<'a, K: Copy, V> Iterator for NodeIter<'a, K, V> {
+    type Item = &'a V;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        use std::mem;
+
+        match self.to_visit.pop() {
+            None => match self.parent.take() {
+                None => None,
+                Some(parent) => {
+                    *self = *parent;
+                    self.next()
+                }
+            },
+            Some(node) => {
+                if self.started {
+                    *self = NodeIter::new(Some(Box::new(mem::take(self))), node, self.query);
+                    self.next()
+                } else {
+                    self.started = true;
+                    Some(&node.value)
+                }
+            }
+        }
+    }
+}
+
+
 impl<K: std::cmp::PartialOrd + std::ops::Add<Output = K> + Copy, V> Node<K, V> {
     fn new(x: K, y: K, value: V) -> Node<K, V> {
         Node {
-            top_left: Box::new(None),
-            top_right: Box::new(None),
-            bottom_left: Box::new(None),
-            bottom_right: Box::new(None),
+            children: [None, None, None, None],
             value: value,
             x: x,
             y: y
         }
     }
 
-    fn insert(&mut self, x: K, y: K, value: V) {
-        let quadrant = if x < self.x {
-            if y < self.y {
-                &mut *self.bottom_left
-            } else {
-                &mut *self.top_left
-            }
-        } else {
-            if y < self.y {
-                &mut *self.bottom_right
-            } else {
-                &mut *self.top_right
-            }
-        };
-        match quadrant {
-            Some(node) => node.insert(x, y, value),
-            None => *quadrant = Some(Node::new(x, y, value)),
-        }
+    fn child_index(&self, x: K, y: K) -> usize {
+        let qx = (x < self.x) as usize;
+        let qy = (y < self.y) as usize;
+        2 * qx + qy
     }
 
-    fn query<'a>(&'a self, query: & Query<K>, into: &mut Vec<&'a V>) {
-        let i_am_in_the_query_rectangle =
-            query.x < self.x
-            && self.x < query.x + query.w
-            && query.y < self.y
-            && self.y < query.y + query.h;
-
-        if i_am_in_the_query_rectangle {
-            into.push(&self.value);
-        }
-        if query.x < self.x {
-            if query.y < self.y {
-                match &*self.bottom_left {
-                    Some(node) => node.query(query, into),
-                    _ => {},
-                }
-            }
-            if query.y + query.h > self.y {
-                match &*self.top_left {
-                    Some(node) => node.query(query, into),
-                    _ => {},
-                }   
-            }
-        }
-        if query.x + query.w > self.x {
-            if query.y < self.y {
-                match &*self.bottom_right {
-                    Some(node) => node.query(query, into),
-                    _ => {},
-                }
-            }
-            if query.y + query.h > self.y {
-                match &*self.top_right {
-                    Some(node) => node.query(query, into),
-                    _ => {},
-                }   
-            }   
+    fn insert(&mut self, x: K, y: K, value: V) {
+        let idx = self.child_index(x, y);
+        match &mut self.children[idx] {
+            Some(node) => node.insert(x, y, value),
+            None => self.children[idx] = Some(Box::new(Node::new(x, y, value))),
         }
     }
 }
@@ -88,7 +129,7 @@ pub struct QuadTree<K, V> {
     root: Option<Node<K, V>>,
 }
 
-impl<K: std::cmp::PartialOrd + std::ops::Add<Output = K> + Copy, V> QuadTree<K, V> {
+impl<'a, K: std::cmp::PartialOrd + std::ops::Add<Output = K> + Copy, V> QuadTree<K, V> {
     pub fn new() -> QuadTree<K, V> {
         QuadTree {root: None}
     }
@@ -100,30 +141,53 @@ impl<K: std::cmp::PartialOrd + std::ops::Add<Output = K> + Copy, V> QuadTree<K, 
         }
     }
 
-    pub fn query_rect<'a>(&'a self, x: K, y: K, w: K, h: K) -> Vec<&'a V> {
-        let mut res = vec![];
-        let q = Query {x: x, y: y, w: w, h: h};
+    fn iter_from_root(&self, query: Query<K>) -> NodeIter<'_, K, V> {
         match &self.root {
-            Some(node) => node.query(&q, &mut res),
-            _ => {},
+            Some(node) => NodeIter::new(None, node, query),
+            None => NodeIter::default(),
         }
-        return res;
+    }
+
+    pub fn iter(&self) -> NodeIter<'_, K, V> {
+        self.iter_from_root(Query::Everything)
+    }
+
+    pub fn rect(&self, x: K, y: K, w: K, h: K) -> NodeIter<'_, K, V> {
+        self.iter_from_root(Query::Rect {x:x, y:y, w:w, h:h})
     }
 }
 
-/*
-fn main() {
-    use rand::prelude::*;
 
-    let mut q: QuadTree<f64, i32> = QuadTree::new();
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    for i in 0..1000000 {
-        let x: f64 = random();
-        let y: f64 = random();
-        q.insert(2.*x-1., 2.*y-1., i);
+    fn populate_qtree(tree: &mut QuadTree<f64, i32>) {
+        tree.insert(0.250, 0.250, 1);
+        tree.insert(0.500, 0.500, 2);
+        tree.insert(1.500, 1.500, 3);
+        tree.insert(0.500, 1.500, 4);
+        tree.insert(1.500, 0.500, 5);
     }
 
-    let res = q.query_rect(0.0, 0.0, 1.0, 1.0);
-    println!("Result: {}", res.len());
+    #[test]
+    fn iter_on_everything() {
+        let mut q: QuadTree<f64, i32> = QuadTree::new();
+        let v1: Vec<i32> = q.iter().copied().collect();
+        assert!(v1.len() == 0);
+
+        populate_qtree(&mut q);
+
+        let v2: Vec<i32> = q.iter().copied().collect();
+        assert!(v2.len() == 5);
+    }
+
+    #[test]
+    fn iter_on_rect() {
+        let mut q: QuadTree<f64, i32> = QuadTree::new();
+        populate_qtree(&mut q);
+
+        let v2: Vec<i32> = q.rect(0., 0., 1., 1.).copied().collect();
+        assert!(v2.len() == 2);
+    }
 }
-*/
