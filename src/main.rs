@@ -68,6 +68,7 @@ impl Area for Creature {
 const N_INPUT_NEURONS: usize = 15;
 const N_OUTPUT_NEURONS: usize = 2;
 const MAX_CREATURE_SIZE: f64 = 35.;
+const MAX_INTERNAL_NEURONS: usize = 3;
 
 impl Creature {
     pub fn random(n_genes: usize) -> Creature {
@@ -87,7 +88,11 @@ impl Creature {
 
         let characteristics = genome[0];
         let size = 3.0 + (characteristics & 0xff) as f64 / 8.0;
-        let n_internal_neurons = 1 + ((characteristics >> 8) & 0x03) as usize;
+        let n_internal_neurons: usize = if MAX_INTERNAL_NEURONS == 0 {
+            0
+        } else {
+            ((characteristics >> 8) & 0x03) as usize
+        };
 
         Creature {
             adn: genome.iter().skip(1).map(|x| *x).collect(),
@@ -103,7 +108,7 @@ impl Creature {
 
     pub fn genome(&self) -> Vec<u32> {
         let size = (8.0 * (self.size - 3.0)) as u32;
-        let characteristics = ((self.internal_neurons.len() - 1) << 8) as u32 | size;
+        let characteristics = (self.internal_neurons.len() << 8) as u32 | size;
         let mut res = vec![characteristics];
         res.extend(&self.adn);
         return res;

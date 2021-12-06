@@ -60,11 +60,19 @@ impl Synapse {
         Synapse {
             neuron_src: match self.neuron_src {
                 SrcNeuron::Input(x) => SrcNeuron::Input(x % input_neurons),
-                SrcNeuron::Internal(x) => SrcNeuron::Internal(x % internal_neurons),
+                SrcNeuron::Internal(x) => if internal_neurons > 0 {
+                    SrcNeuron::Internal(x % internal_neurons)
+                } else {
+                    SrcNeuron::Input(x % input_neurons)
+                },
             },
             neuron_dst: match self.neuron_dst {
                 DstNeuron::Output(x) => DstNeuron::Output(x % output_neurons),
-                DstNeuron::Internal(x) => DstNeuron::Internal(x % internal_neurons),
+                DstNeuron::Internal(x) => if internal_neurons > 0 {
+                    DstNeuron::Internal(x % internal_neurons)
+                } else {
+                    DstNeuron::Output(x % output_neurons)
+                },
             },
             weight: self.weight,
         }
