@@ -1,6 +1,9 @@
 mod synapse;
 use synapse::*;
 
+mod quadtree;
+use quadtree::QuadTree;
+
 extern crate simple;
 
 use std::collections::HashSet;
@@ -62,9 +65,9 @@ impl Area for Creature {
     }
 }
 
-const SENSE_RANGE_MULT: f64 = 5.0;
 const N_INPUT_NEURONS: usize = 15;
 const N_OUTPUT_NEURONS: usize = 2;
+const MAX_CREATURE_SIZE: f64 = 35.;
 
 impl Creature {
     pub fn random(n_genes: usize) -> Creature {
@@ -84,7 +87,7 @@ impl Creature {
 
         let characteristics = genome[0];
         let size = 3.0 + (characteristics & 0xff) as f64 / 8.0;
-        let n_internal_neurons = 1 + ((characteristics >> 8) & 0x01) as usize;
+        let n_internal_neurons = 1 + ((characteristics >> 8) & 0x03) as usize;
 
         Creature {
             adn: genome.iter().skip(1).map(|x| *x).collect(),
@@ -106,17 +109,27 @@ impl Creature {
         return res;
     }
 
-    pub fn reproduce(&self, mutation_prob: f64) -> Creature {
+    pub fn mutate_genome(mutation_prob: f64, genome: &Vec<u32>) -> Vec<u32> {
         use rand::prelude::*;
-        let genome = self.genome().iter().map(|gene| {
+        genome.iter().map(|gene| {
             let p: f64 = random();
             if p < mutation_prob {
                 mutate_gene(*gene, 3)
             } else {
                 *gene
             }
-        }).collect();
-        Creature::from_genome(&genome)
+        }).collect()
+    }
+
+    pub fn combine_genomes(mother: &Vec<u32>, father: &Vec<u32>) -> Vec<u32> {
+        mother.iter()
+              .zip(father)
+              .map(|(m, f)| (m & 0xffff0000) | (f & 0x0000ffff))
+              .collect()
+    }
+
+    pub fn reproduce(&self, mutation_prob: f64) -> Creature {
+        Creature::from_genome(&Creature::mutate_genome(mutation_prob, &self.genome()))
     }
 
     pub fn randomize_position(&mut self, bounds: &Array<f64, Ix1>) {
@@ -280,7 +293,7 @@ impl World {
         self.population.push(creature);
     }
 
-    pub fn sense(&self, w: f64, h: f64, s: f64) -> WorldSense {
+    pub fn sense(&self, x: f64, y: f64, s: f64, tree: &QuadTree<f64,&Creature>) -> WorldSense {
         let mut res = WorldSense {
             coord_top_left: self.top_left.clone(),
             coord_bottom_right: self.bottom_right.clone(),
@@ -295,32 +308,29 @@ impl World {
             age: self.age,
         };
 
-        let p = array![h, w];
-        for c in &self.population {
-            if distance(&p, &c.position) < s {
-                if c.position[0] < p[0] {
-                    if c.position[1] < p[1] {
-                        res.top_left += 1;
-                        if c.blocked {
-                            res.top_left_blocked += 1;
-                        }
-                    } else {
-                        res.top_right += 1;
-                        if c.blocked {
-                            res.top_right_blocked += 1;
-                        }
+        for c in tree.rect(x - s, y - s, 2. *s, 2.*s) {
+            if c.position[0] < y {
+                if c.position[1] < x {
+                    res.top_left += 1;
+                    if c.blocked {
+                        res.top_left_blocked += 1;
                     }
                 } else {
-                    if c.position[1] < p[1] {
-                        res.bottom_left += 1;
-                        if c.blocked {
-                            res.bottom_left_blocked += 1;
-                        }
-                    } else {
-                        res.bottom_right += 1;
-                        if c.blocked {
-                            res.bottom_right_blocked += 1;
-                        }
+                    res.top_right += 1;
+                    if c.blocked {
+                        res.top_right_blocked += 1;
+                    }
+                }
+            } else {
+                if c.position[1] < x {
+                    res.bottom_left += 1;
+                    if c.blocked {
+                        res.bottom_left_blocked += 1;
+                    }
+                } else {
+                    res.bottom_right += 1;
+                    if c.blocked {
+                        res.bottom_right_blocked += 1;
                     }
                 }
             }
@@ -332,10 +342,15 @@ impl World {
     pub fn live(&mut self) {
         self.age += 1;
 
+        let mut tree: QuadTree<f64, &Creature> = QuadTree::new();
+        for creature in &self.population {
+            tree.insert(creature.position[1], creature.position[0], creature);
+        }
+
         let sense: Vec<WorldSense> =
             self.population
                 .par_iter()
-                .map(|c| self.sense(c.position[0], c.position[1], SENSE_RANGE_MULT * c.size))
+                .map(|c| self.sense(c.position[1], c.position[0], 150., &tree))
                 .collect();
 
         // Let the creatures think
@@ -347,13 +362,13 @@ impl World {
         let collisions: Vec<bool> =
             self.population
                 .par_iter()
-                .enumerate()
-                .map(|(i, creature)|
+                .map(|creature|
                     self.collide_next(creature)
                     || self.population
                            .iter()
-                           .enumerate()
-                           .any(|(j, c)| i != j && c.collide_next(creature))
+                           .any(|c| ! std::ptr::eq(c, creature) && c.collide_next(creature))
+                    /*|| tree.rect(creature.position[1]-2.*MAX_CREATURE_SIZE, creature.position[0]-2.*MAX_CREATURE_SIZE, 2.*MAX_CREATURE_SIZE, 2.*MAX_CREATURE_SIZE)
+                           .any(|c|  *c != creature && c.collide_next(creature))*/
                 )
                 .collect();
 
@@ -368,12 +383,13 @@ impl World {
     }
 }
 
+const SEXUAL_REPRODUCTION: bool = false;
 const N_CREATURES: u32 = 100;
-const N_GENES: u32 = 16;
+const N_GENES: u32 = 20;
 
 const WORLD_WIDTH: u32 = 1920;
 const WORLD_HEIGHT: u32 = 1080;
-const MUTATION_P: f64 = 3.0 / (N_CREATURES * N_GENES) as f64;
+const MUTATION_P: f64 = 25.0 / (N_CREATURES * N_GENES) as f64;
 
 fn simulate(genomes: &Vec<Vec<u32>>, gardens: &Vec<Garden>) -> Vec<Vec<u32>> {
     let mut world = World::new(WORLD_WIDTH as usize, WORLD_HEIGHT as usize, gardens);
@@ -386,10 +402,11 @@ fn simulate(genomes: &Vec<Vec<u32>>, gardens: &Vec<Garden>) -> Vec<Vec<u32>> {
     }
 
     let mut app = simple::Window::new("Creatures", WORLD_WIDTH as u16, WORLD_HEIGHT as u16);
-    for _ in 0..300 {
+    for _ in 0..150 {
         if ! app.next_frame(){
             panic!("STOP");
         }
+        world.live();
         world.live();
 
         app.clear();
@@ -432,30 +449,50 @@ fn simulate(genomes: &Vec<Vec<u32>>, gardens: &Vec<Garden>) -> Vec<Vec<u32>> {
          .collect()
 }
 
+fn reproduce(parents: &Vec<Vec<u32>>, sexually: bool) -> Vec<Vec<u32>> {
+    if parents.len() == 0 {
+        (0..N_CREATURES).map(|_| Creature::random(N_GENES as usize).genome()).collect()
+    } else {
+        let mut genomes = vec![];
+        while genomes.len() < N_CREATURES as usize {
+            let mother_genes = &parents[genomes.len() % parents.len()];
+            let father_genes = &parents[(genomes.len()+1) % parents.len()];
+
+            let child_genes = if sexually {
+                Creature::mutate_genome(MUTATION_P, &Creature::combine_genomes(mother_genes, father_genes))
+            } else {
+                Creature::mutate_genome(MUTATION_P, &mother_genes)
+            };
+            genomes.push(child_genes);
+        }
+        return genomes;
+    }
+}
+
 fn main() {
     let mut run = 1;
     let mut generation = 0;
-    let mut genomes: Vec<Vec<u32>> = (0..N_CREATURES).map(|_| Creature::random(N_GENES as usize).genome()).collect();
+    let mut genomes: Vec<Vec<u32>> = reproduce(&Vec::new(), SEXUAL_REPRODUCTION);
 
     let gardens = vec![
+        Garden {
+            top: (2*WORLD_HEIGHT/7) as f64,
+            left: (2*WORLD_WIDTH/7) as f64,
+            bottom: (5*WORLD_HEIGHT/7) as f64,
+            right: (5*WORLD_WIDTH/7) as f64,
+        },
         // Garden {
         //     top: (2*WORLD_HEIGHT/7) as f64,
-        //     left: (2*WORLD_WIDTH/7) as f64,
+        //     left: (0) as f64,
         //     bottom: (5*WORLD_HEIGHT/7) as f64,
-        //     right: (5*WORLD_WIDTH/7) as f64,
+        //     right: (WORLD_WIDTH/12) as f64,
         // },
-        Garden {
-            top: (WORLD_HEIGHT/7) as f64,
-            left: (0) as f64,
-            bottom: (6*WORLD_HEIGHT/7) as f64,
-            right: (WORLD_WIDTH/12) as f64,
-        },
-        Garden {
-            top: (WORLD_HEIGHT/7) as f64,
-            left: (11*WORLD_WIDTH/12) as f64,
-            bottom: (6*WORLD_HEIGHT/7) as f64,
-            right: (WORLD_WIDTH) as f64,
-        },
+        // Garden {
+        //  top: (2*WORLD_HEIGHT/7) as f64,
+        //  left: (11*WORLD_WIDTH/12) as f64,
+        //  bottom: (5*WORLD_HEIGHT/7) as f64,
+        //  right: (WORLD_WIDTH) as f64,
+        // },
     ];
 
     let gardens_area: f64 = gardens.iter().map(Garden::area).sum();
@@ -479,15 +516,9 @@ fn main() {
         if survivors.len() == 0 {
             generation = 0;
             run += 1;
-            genomes = (0..N_CREATURES).map(|_| Creature::random(N_GENES as usize).genome()).collect();
         } else {
-            genomes.clear();
-
-            while genomes.len() < N_CREATURES as usize {
-                let parent = &survivors[genomes.len() % survivors.len()];
-                genomes.push(Creature::from_genome(parent).reproduce(MUTATION_P).genome());
-            }
             generation += 1;
         }
+        genomes = reproduce(&survivors, SEXUAL_REPRODUCTION);
     }
 }
