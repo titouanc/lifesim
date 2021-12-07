@@ -475,10 +475,6 @@ fn reproduce(parents: &Vec<Vec<u32>>, sexually: bool) -> Vec<Vec<u32>> {
 }
 
 fn main() {
-    let mut run = 1;
-    let mut generation = 0;
-    let mut genomes: Vec<Vec<u32>> = reproduce(&Vec::new(), SEXUAL_REPRODUCTION);
-
     let gardens = vec![
         Garden {
             top: (2*WORLD_HEIGHT/7) as f64,
@@ -503,20 +499,26 @@ fn main() {
     let gardens_area: f64 = gardens.iter().map(Garden::area).sum();
     let gardens_ratio = gardens_area / (WORLD_WIDTH * WORLD_HEIGHT) as f64;
 
+    let mut run = 1;
+    let mut generation = 0;
+    let mut genomes: Vec<Vec<u32>> = reproduce(&Vec::new(), SEXUAL_REPRODUCTION);
+
     loop {
         let genomes_distinct: HashSet<String> = genomes.iter().map(pretty_genome).collect();
         let diversity_ratio = (genomes_distinct.len() as f64) / (N_CREATURES as f64);
 
         let survivors = simulate(&genomes, &gardens);
-
         let survivors_ratio = (survivors.len() as f64) / (N_CREATURES as f64);
+
+        // Score: -100..0: worse than random
+        //        0..100 : better than random
         let score = if survivors_ratio < gardens_ratio {
             survivors_ratio / gardens_ratio - 1.
         } else {
             (survivors_ratio - gardens_ratio) / (1. - gardens_ratio)
         };
-        let pretty_score = f64::round(100. * score) as i32;
-        println!("Civilisation {} / Generation: {} / Diversity: {}% / Survivors: {}% => Score: \x1b[1m{}\x1b[0m", run, generation, (100. * diversity_ratio) as i32, (100. * survivors_ratio) as i32, pretty_score);
+
+        println!("Civilisation {} / Generation: {} / Diversity: {}% / Survivors: {}% => Score: \x1b[1m{}\x1b[0m", run, generation, (100. * diversity_ratio) as i32, (100. * survivors_ratio) as i32, (100. * score) as i32);
         
         if survivors.len() == 0 {
             generation = 0;
